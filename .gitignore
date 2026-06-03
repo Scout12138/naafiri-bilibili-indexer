@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
+
+# Sensitive
+cookies.txt
+*.cookies.txt
+
+# Large data (re-downloadable)
+data/videos/
+data/frames/
+data/screenshots/
+output/
+
+# ffmpeg binaries (too large for GitHub, see WORKFLOW.md for setup)
+tools/ffmpeg/bin/
+
+# Temp
+tmp.txt
+*.tmp
+
+# Conda
+.conda/
+
+# Logs
+logs/

@@ -1,0 +1,65 @@
+{
+    "_comment": "=== Naafiri B站录播中单索引 - 统一配置文件 ===",
+
+    "up主": {
+        "space_url": "https://space.bilibili.com/70971218",
+        "mid": 70971218,
+        "_note": "过往（国一狼狗中单）"
+    },
+
+    "crop": {
+        "top_mid": {"x": 556, "y": 61, "w": 163, "h": 240},
+        "bottom_mid": {"x": 556, "y": 411, "w": 163, "h": 240},
+        "_note": "1280x720标准画面下的中单位卡片坐标。若视频不是1280x720，程序会自动按比例缩放。"
+    },
+
+    "pipeline": {
+        "target_champion": "Naafiri",
+        "merge_window_sec": 300,
+        "clip_sim_threshold": 0.76,
+        "clip_gap_threshold": 0.03,
+        "confidence": {
+            "high_sim": 0.82,
+            "high_gap": 0.06,
+            "medium_sim": 0.78,
+            "medium_gap": 0.04
+        },
+        "_note": "低于medium_sim/gap阈值的标记为低置信度"
+    },
+
+    "download": {
+        "format": "30064+30280",
+        "target_resolution": "1280x720",
+        "target_fps": 30,
+        "_note": "30064=B站720p视频流, 30280=音频流。若yt-dlp不可用请检查cookies。"
+    },
+
+    "filter": {
+        "min_duration_min": 10,
+        "exclude_keywords": ["切片", "集锦", "高光", "短视频", "精彩片段", "TOP", "剪辑", "Highlight", "MAD"],
+        "_note": "长录播筛选：时长≥10分钟，标题不包含以上关键词"
+    },
+
+    "paths": {
+        "video_dir": "data/videos",
+        "frame_dir": "data/frames",
+        "output_dir": "output",
+        "screenshot_dir": "data/screenshots",
+        "assets_dir": "data/assets/lol_loading_v2",
+        "champion_map": "data/assets/champion_map_v2.csv",
+        "ref_cache": "data/crops/ref_v2_vit_l14.pkl",
+        "ffmpeg_dir": "tools/ffmpeg/bin"
+    },
+
+    "models": {
+        "clip_model": "ViT-L-14",
+        "clip_pretrained": "datacomp_xl_s13b_b90k",
+        "device": "cuda"
+    },
+
+    "frame_extraction": {
+        "interval_sec": 2,
+        "jpeg_quality": 2,
+        "_note": "ffmpeg -q:v 2 控制JPEG质量，2=高质量"
+    }
+}

@@ -1,0 +1,26 @@
+# Python dependencies for Naafiri B站录播中单索引
+# Install: pip install -r requirements.txt
+
+# Core ML
+torch>=2.0
+open-clip-torch>=2.24
+
+# Image processing
+opencv-python>=4.0
+Pillow>=10.0
+numpy>=1.24
+
+# Excel output
+xlsxwriter>=3.0
+
+# Networking
+requests>=2.28
+
+# Video download
+yt-dlp>=2024.0
+
+# Optional / dev
+pandas>=1.5
+imagehash>=4.3
+scikit-image>=0.21
+tqdm>=4.64
