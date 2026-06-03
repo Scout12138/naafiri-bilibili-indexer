@@ -18,6 +18,7 @@
         "merge_window_sec": 300,
         "clip_sim_threshold": 0.76,
         "clip_gap_threshold": 0.03,
+        "coarse_dv_threshold": 20,
         "confidence": {
             "high_sim": 0.82,
             "high_gap": 0.06,

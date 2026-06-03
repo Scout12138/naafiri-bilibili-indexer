@@ -365,6 +365,21 @@ def main():
     # 6. Report
     step_generate_report(results, config, skipped)
 
+    # 7. Incremental merge into master Excel
+    if results:
+        log("Step 7/7: 增量合并到总表")
+        merge_result = subprocess.run(
+            [sys.executable, "scripts/merge_excel.py"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+        if merge_result.returncode == 0:
+            for line in (merge_result.stdout or "").splitlines():
+                if line.strip():
+                    log(f"  {line.strip()}")
+        else:
+            log(f"  合并警告: {merge_result.stderr[-200:] if merge_result.stderr else 'unknown'}", "WARN")
+
     # Done
     total_games = sum(r["games"] for r in results)
     summary = f"全部完成! 处理 {len(videos)} 个视频, {total_games} 局Naafiri对局"

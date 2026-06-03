@@ -55,6 +55,11 @@ def main(bv_id):
         if bv_id in f and f.endswith(".mp4")
     ])
     print(f"Video parts: {len(videos)}")
+    # Clean existing frames to avoid duplicates on re-run
+    if os.path.isdir(frame_dir):
+        import shutil
+        shutil.rmtree(frame_dir)
+        os.makedirs(frame_dir)
     cumulative = 1
     for v in videos:
         path = os.path.join(VIDEO_DIR, v)

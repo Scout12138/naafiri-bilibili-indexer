@@ -83,7 +83,7 @@ def coarse_filter_frame(img):
     dv = (top_g.mean()+bot_g.mean())/2 - v_bg
     top_tex = cv2.Laplacian(top_g, cv2.CV_64F).var()
     bot_tex = cv2.Laplacian(bot_g, cv2.CV_64F).var()
-    return sum([v_bg<55, dv>25, top_tex>100 and bot_tex>100]) >= 3
+    return sum([v_bg<55, dv>20, top_tex>100 and bot_tex>100]) >= 3
 
 # ===== Build timeline =====
 def build_timeline(bv_id):
