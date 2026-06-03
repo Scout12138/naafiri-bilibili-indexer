@@ -143,7 +143,7 @@ def get_video_info(bv_id):
     return resp.json().get("data") or {}
 
 
-def fetch_latest_videos(mid, count=30):
+def fetch_latest_videos(mid, count=30, cookies_path=None):
     """Fetch latest video BVs from a UP主's space using yt-dlp flat playlist."""
     cmd = [
         sys.executable, "-m", "yt_dlp",
@@ -151,10 +151,18 @@ def fetch_latest_videos(mid, count=30):
         "--print", "%(id)s",
         f"https://space.bilibili.com/{mid}/video",
     ]
+    if cookies_path and os.path.isfile(cookies_path):
+        cmd.insert(3, "--cookies")
+        cmd.insert(4, cookies_path)
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=60)
-        bvs = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("BV")]
+        # Check for yt-dlp errors on stderr
+        stderr = (result.stderr or "").strip()
+        if stderr and "ERROR:" in stderr:
+            print(f"[WARN] yt-dlp space listing error: {stderr[:200]}")
+        bvs = [line.strip() for line in (result.stdout or "").splitlines() if line.strip().startswith("BV")]
         return bvs[:count]
     except Exception as e:
         print(f"[WARN] yt-dlp space listing failed: {e}")

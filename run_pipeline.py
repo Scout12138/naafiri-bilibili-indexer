@@ -85,7 +85,7 @@ def is_already_processed(bv_id, config):
     return False
 
 
-def step_discover_videos(args, config):
+def step_discover_videos(args, config, cookies_path=None):
     """Discover target videos based on mode."""
     log("Step 3/6: 确定目标视频")
 
@@ -121,7 +121,7 @@ def step_discover_videos(args, config):
         from scripts.bilibili_utils import fetch_latest_videos, filter_long_recordings
         # Fetch more than requested to compensate for already-processed ones
         fetch_count = max(n * 5, 50)
-        latest_bvs = fetch_latest_videos(mid, count=fetch_count)
+        latest_bvs = fetch_latest_videos(mid, count=fetch_count, cookies_path=cookies_path)
         if not latest_bvs:
             fatal("无法获取UP主视频列表。请检查网络连接。")
 
@@ -294,7 +294,7 @@ def main():
     uname = step_cookies_verify(cookies_path)
 
     # 3. Discover videos
-    videos, skipped = step_discover_videos(args, config)
+    videos, skipped = step_discover_videos(args, config, cookies_path)
     if not videos:
         if skipped:
             log(f"全部 {skipped} 个视频已处理过，没有新视频需要处理。")
