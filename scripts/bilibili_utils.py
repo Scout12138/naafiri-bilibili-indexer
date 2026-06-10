@@ -73,8 +73,9 @@ def check_720p_available(cookies_path, bv_id):
         "-F", f"https://www.bilibili.com/video/{bv_id}",
     ]
     try:
+        # Longer timeout for multi-part videos (each part requires a separate API call)
         result = subprocess.run(cmd, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=60)
+                                encoding="utf-8", errors="replace", timeout=180)
         output = result.stdout + result.stderr
         has_720p = "1280x720" in output
         if has_720p:
@@ -144,35 +145,177 @@ def get_video_info(bv_id):
 
 
 def fetch_latest_videos(mid, count=30, cookies_path=None):
-    """Fetch latest video BVs from a UP主's space using yt-dlp flat playlist."""
-    cmd = [
-        sys.executable, "-m", "yt_dlp",
-        "--flat-playlist",
-        "--print", "%(id)s",
-        f"https://space.bilibili.com/{mid}/video",
-    ]
-    if cookies_path and os.path.isfile(cookies_path):
-        cmd.insert(3, "--cookies")
-        cmd.insert(4, cookies_path)
+    """Fetch latest video BVs from a UP主's space using mobile API (low-frequency, anti-412).
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=60)
-        # Check for yt-dlp errors on stderr
-        stderr = (result.stderr or "").strip()
-        if stderr and "ERROR:" in stderr:
-            print(f"[WARN] yt-dlp space listing error: {stderr[:200]}")
-        bvs = [line.strip() for line in (result.stdout or "").splitlines() if line.strip().startswith("BV")]
-        return bvs[:count]
-    except Exception as e:
-        print(f"[WARN] yt-dlp space listing failed: {e}")
-        return []
+    Uses the mobile app API endpoint which does not require wbi signing.
+    Paginates with 0.5s sleep between pages to avoid rate limiting.
+    On 412, stops immediately and logs the page that triggered it.
+    """
+    cookies = {}
+    if cookies_path and os.path.isfile(cookies_path):
+        cookies = parse_netscape_cookies(cookies_path)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 BiliDroid/7.0.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)",
+        "Referer": "https://m.bilibili.com/",
+    }
+
+    bvs = []
+    ps = min(count, 30)  # 30 per page max
+    max_pages = (count + ps - 1) // ps
+
+    for pn in range(1, max_pages + 1):
+        try:
+            resp = requests.get(
+                "https://api.bilibili.com/x/space/arc/search",
+                params={"mid": mid, "ps": ps, "pn": pn, "order": "pubdate"},
+                cookies=cookies,
+                headers=headers,
+                timeout=30,
+            )
+
+            if resp.status_code == 412:
+                print(f"[WARN] 412 风控 — 接口: space/arc/search, pn={pn}, "
+                      f"返回: {resp.text[:200]}")
+                break
+
+            data = resp.json()
+            if data.get("code") != 0:
+                print(f"[WARN] API error: code={data.get('code')}, "
+                      f"msg={data.get('message', '?')}, pn={pn}")
+                break
+
+            vlist = data.get("data", {}).get("list", {}).get("vlist", [])
+            if not vlist:
+                break
+
+            for v in vlist:
+                bvid = v.get("bvid", "")
+                if bvid:
+                    bvs.append(bvid)
+
+            # Low frequency: sleep between pages
+            if pn < max_pages:
+                time.sleep(0.5)
+
+        except Exception as e:
+            print(f"[WARN] Space listing failed (pn={pn}): {e}")
+            break
+
+    return bvs[:count]
+
+
+def fetch_and_filter_videos(mid, config, max_videos=200, cookies_path=None):
+    """Fetch videos from UP主 space and filter by config in one pass.
+
+    Uses mobile API which returns title+duration directly — avoids N+1
+    get_video_info calls. Paginates with sleep between pages (anti-412).
+
+    Returns list of candidate dicts matching title keyword + duration filters.
+    """
+    cookies = {}
+    if cookies_path and os.path.isfile(cookies_path):
+        cookies = parse_netscape_cookies(cookies_path)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 BiliDroid/7.0.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)",
+        "Referer": "https://m.bilibili.com/",
+    }
+
+    min_sec = config.get("filter", {}).get("min_duration_min", 10) * 60
+    exclude_kw = config.get("filter", {}).get("exclude_keywords", [])
+    title_kw = config.get("filter", {}).get("title_keyword", "")
+
+    candidates = []
+    ps = 30
+
+    for pn in range(1, 999):  # paginate until empty or 412
+        try:
+            api_params = {"mid": mid, "ps": ps, "pn": pn, "order": "pubdate"}
+            # Use server-side keyword filter when available (finds all matching videos)
+            if title_kw:
+                api_params["keyword"] = title_kw
+
+            resp = requests.get(
+                "https://api.bilibili.com/x/space/arc/search",
+                params=api_params,
+                cookies=cookies,
+                headers=headers,
+                timeout=30,
+            )
+
+            if resp.status_code == 412:
+                print(f"[WARN] 412 风控 — 接口: space/arc/search, pn={pn}, "
+                      f"返回: {resp.text[:200]}")
+                break
+
+            data = resp.json()
+            if data.get("code") != 0:
+                print(f"[WARN] API error: code={data.get('code')}, "
+                      f"msg={data.get('message', '?')}, pn={pn}")
+                break
+
+            vlist = data.get("data", {}).get("list", {}).get("vlist", [])
+            if not vlist:
+                break
+
+            for v in vlist:
+                title = v.get("title", "")
+                bvid = v.get("bvid", "")
+                dur_str = v.get("length", "0:00")
+
+                # Parse duration "MM:SS" or "HH:MM:SS"
+                dur_parts = dur_str.split(":")
+                if len(dur_parts) == 2:
+                    dur_sec = int(dur_parts[0]) * 60 + int(dur_parts[1])
+                elif len(dur_parts) == 3:
+                    dur_sec = (int(dur_parts[0]) * 3600 +
+                               int(dur_parts[1]) * 60 +
+                               int(dur_parts[2]))
+                else:
+                    dur_sec = 0
+
+                pubdate = v.get("created", 0)
+
+                # Apply filters
+                if dur_sec < min_sec:
+                    continue
+                if title_kw and title_kw not in title:
+                    continue
+                if any(kw.lower() in title.lower() for kw in exclude_kw):
+                    continue
+
+                candidates.append({
+                    "bv_id": bvid,
+                    "title": title,
+                    "duration_sec": dur_sec,
+                    "parts": 1,  # mobile API doesn't return parts; get_video_info needed for multi-P
+                    "pubdate": pubdate,
+                    "pubdate_str": time.strftime("%Y-%m-%d %H:%M", time.localtime(pubdate)) if pubdate else "?",
+                })
+
+                if len(candidates) >= max_videos:
+                    break
+
+            if len(candidates) >= max_videos:
+                break
+
+            # Low frequency between pages
+            if pn < max_pages:
+                time.sleep(0.5)
+
+        except Exception as e:
+            print(f"[WARN] Space listing failed (pn={pn}): {e}")
+            break
+
+    return candidates
 
 
 def filter_long_recordings(bv_ids, config):
     """Filter BVs: keep only long gameplay recordings (not clips/highlights)."""
     min_sec = config.get("filter", {}).get("min_duration_min", 10) * 60
     exclude_kw = config.get("filter", {}).get("exclude_keywords", [])
+    title_kw = config.get("filter", {}).get("title_keyword", "")
 
     results = []
     for bv in bv_ids:
@@ -186,6 +329,8 @@ def filter_long_recordings(bv_ids, config):
 
         # Apply filters
         if dur < min_sec and parts <= 1:
+            continue
+        if title_kw and title_kw not in title:
             continue
         if any(kw.lower() in title.lower() for kw in exclude_kw):
             continue

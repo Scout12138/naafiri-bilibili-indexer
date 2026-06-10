@@ -1,17 +1,31 @@
 #!/usr/bin/env python3
 """
 Incremental merge: scans output/ for per-video Excel files, appends only BVs
-not already in naafiri_mid_index_merged.xlsx. Existing rows/images are preserved.
+not already in the merged Excel. Existing rows/images are preserved.
+
+Usage:
+  python scripts/merge_excel.py                          # default: naafiri
+  python scripts/merge_excel.py --prefix hwei            # Hwei pipeline
 """
-import os, sys, glob, re, io
+import os, sys, glob, re, io, argparse
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as XLImage
 
 OUTPUT_DIR = "output"
-MERGED_NAME = "naafiri_mid_index_merged.xlsx"
-SHEET_NAME = "Naafiri中单索引"
+
+# ─── Parse --prefix ──────────────────────────────────────────────────────
+_parser = argparse.ArgumentParser(description="Incremental merge for mid-index Excel files")
+_parser.add_argument("--prefix", type=str, default="naafiri",
+                     help="File prefix (naafiri or hwei)")
+_args = _parser.parse_args()
+PREFIX = _args.prefix
+CHAMPION_NAME = PREFIX.capitalize()  # "Naafiri" or "Hwei"
+
+MERGED_NAME = f"{PREFIX}_mid_index_merged.xlsx"
+SHEET_NAME = f"{CHAMPION_NAME}中单索引"
+SRC_PATTERN = f"{PREFIX}_mid_index_BV*.xlsx"
 
 COL_HEADERS = ["序号", "视频标题", "BV号", "跳转链接", "对局时间(分P内)", "分P", "对位英雄", "截图"]
 COL_WIDTHS  = [4,      38,       16,     50,       12,               4,    18,        22]
@@ -112,7 +126,7 @@ def read_source_sheet(filepath):
 # ─── Main ──────────────────────────────────────────────────────────────
 def main():
     # 1. Find source files
-    pattern = os.path.join(OUTPUT_DIR, "naafiri_mid_index_BV*_final_v2.xlsx")
+    pattern = os.path.join(OUTPUT_DIR, SRC_PATTERN)
     src_files = sorted(glob.glob(pattern))
     if not src_files:
         print("[ERROR] No source Excel files in output/")

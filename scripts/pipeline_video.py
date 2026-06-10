@@ -3,13 +3,27 @@
 Final pipeline: OpenCLIP ViT-L/14, v2 assets, full 3-video validation.
 Outputs per-video Excel with Top3 candidates + summary.
 """
-import csv, os, time, pickle, json, re, shutil
+import csv, os, time, pickle, json, re, shutil, sys
 import numpy as np, torch, cv2
 from PIL import Image
 import open_clip, xlsxwriter
 from collections import defaultdict
 from datetime import datetime
 
+# ─── Parse --config argument ────────────────────────────────────────────
+_pipeline_config = None
+_bv_args = []
+_i = 1
+while _i < len(sys.argv):
+    if sys.argv[_i] == "--config" and _i + 1 < len(sys.argv):
+        with open(sys.argv[_i + 1], "r", encoding="utf-8") as _f:
+            _pipeline_config = json.load(_f)
+        _i += 2
+    else:
+        _bv_args.append(sys.argv[_i])
+        _i += 1
+
+# ─── Defaults ───────────────────────────────────────────────────────────
 DEVICE = "cuda"
 ASSETS_DIR = "data/assets/lol_loading_v2"
 CHAMPION_MAP = "data/assets/champion_map_v2.csv"
@@ -19,10 +33,42 @@ VIDEO_DIR = "data/videos"
 OUT_DIR = "output"
 TARGET = "Naafiri"
 MERGE_WINDOW = 300
+CLIP_SIM_THRESHOLD = 0.76
+CLIP_GAP_THRESHOLD = 0.03
+CONF_HIGH_SIM = 0.82
+CONF_HIGH_GAP = 0.06
+CONF_MEDIUM_SIM = 0.78
+CONF_MEDIUM_GAP = 0.04
 
 TOP = {"x": 556, "y": 61, "w": 163, "h": 240}
 BOT = {"x": 556, "y": 411, "w": 163, "h": 240}
-targets = ["BV1hgVQ6eEzh", "BV1L1VJ6nE7n", "BV1HsVL6EEGc"]
+
+# ─── Override from config if provided ───────────────────────────────────
+if _pipeline_config:
+    TARGET = _pipeline_config.get("pipeline", {}).get("target_champion", TARGET)
+    MERGE_WINDOW = _pipeline_config.get("pipeline", {}).get("merge_window_sec", MERGE_WINDOW)
+    CLIP_SIM_THRESHOLD = _pipeline_config.get("pipeline", {}).get("clip_sim_threshold", CLIP_SIM_THRESHOLD)
+    CLIP_GAP_THRESHOLD = _pipeline_config.get("pipeline", {}).get("clip_gap_threshold", CLIP_GAP_THRESHOLD)
+    CONF_HIGH_SIM = _pipeline_config.get("pipeline", {}).get("confidence", {}).get("high_sim", CONF_HIGH_SIM)
+    CONF_HIGH_GAP = _pipeline_config.get("pipeline", {}).get("confidence", {}).get("high_gap", CONF_HIGH_GAP)
+    CONF_MEDIUM_SIM = _pipeline_config.get("pipeline", {}).get("confidence", {}).get("medium_sim", CONF_MEDIUM_SIM)
+    CONF_MEDIUM_GAP = _pipeline_config.get("pipeline", {}).get("confidence", {}).get("medium_gap", CONF_MEDIUM_GAP)
+    # Paths from config (relative to project root)
+    _cfg_paths = _pipeline_config.get("paths", {})
+    ASSETS_DIR = _cfg_paths.get("assets_dir", ASSETS_DIR)
+    CHAMPION_MAP = _cfg_paths.get("champion_map", CHAMPION_MAP)
+    REF_CACHE = _cfg_paths.get("ref_cache", REF_CACHE)
+    FRAME_DIR = _cfg_paths.get("frame_dir", FRAME_DIR)
+    VIDEO_DIR = _cfg_paths.get("video_dir", VIDEO_DIR)
+    OUT_DIR = _cfg_paths.get("output_dir", OUT_DIR)
+    # Crop coordinates
+    _cfg_crop = _pipeline_config.get("crop", {})
+    if "top_mid" in _cfg_crop:
+        TOP = _cfg_crop["top_mid"]
+    if "bottom_mid" in _cfg_crop:
+        BOT = _cfg_crop["bottom_mid"]
+
+targets = _bv_args if _bv_args else ["BV1hgVQ6eEzh", "BV1L1VJ6nE7n", "BV1HsVL6EEGc"]
 
 print(f"Device: {DEVICE}")
 
@@ -144,17 +190,26 @@ def process_video(bv_id):
         bot_sims = (bot_emb @ ref_embs.T).squeeze(0).cpu().numpy()
         top_idx = np.argsort(top_sims)[::-1]; bot_idx = np.argsort(bot_sims)[::-1]
 
-        top_hero = ref_champs[top_idx[0]]; top_sim = float(top_sims[top_idx[0]]); top_gap = float(top_sims[top_idx[0]]-top_sims[top_idx[1]])
-        bot_hero = ref_champs[bot_idx[0]]; bot_sim = float(bot_sims[bot_idx[0]]); bot_gap = float(bot_sims[bot_idx[0]]-bot_sims[bot_idx[1]])
+        top_hero = ref_champs[top_idx[0]]; top_sim = float(top_sims[top_idx[0]])
+        bot_hero = ref_champs[bot_idx[0]]; bot_sim = float(bot_sims[bot_idx[0]])
+        # Gap to first DIFFERENT champion (skip same champ with multiple skins)
+        top_gap = 0
+        for _j in range(1, len(top_idx)):
+            if ref_champs[top_idx[_j]] != top_hero:
+                top_gap = float(top_sims[top_idx[0]] - top_sims[top_idx[_j]]); break
+        bot_gap = 0
+        for _j in range(1, len(bot_idx)):
+            if ref_champs[bot_idx[_j]] != bot_hero:
+                bot_gap = float(bot_sims[bot_idx[0]] - bot_sims[bot_idx[_j]]); break
 
         # Top-3 for both sides
         top_top3 = [(ref_champs[top_idx[j]], float(top_sims[top_idx[j]]), ref_skins_list[top_idx[j]]) for j in range(3)]
         bot_top3 = [(ref_champs[bot_idx[j]], float(bot_sims[bot_idx[j]]), ref_skins_list[bot_idx[j]]) for j in range(3)]
 
         side = None; opp_hero = None; n_sim = 0; n_gap = 0
-        if top_hero == TARGET and top_sim >= 0.76 and top_gap >= 0.03:
+        if top_hero == TARGET and top_sim >= CLIP_SIM_THRESHOLD and top_gap >= CLIP_GAP_THRESHOLD:
             side = "上方"; opp_hero = bot_hero; n_sim = top_sim; n_gap = top_gap
-        elif bot_hero == TARGET and bot_sim >= 0.76 and bot_gap >= 0.03:
+        elif bot_hero == TARGET and bot_sim >= CLIP_SIM_THRESHOLD and bot_gap >= CLIP_GAP_THRESHOLD:
             side = "下方"; opp_hero = top_hero; n_sim = bot_sim; n_gap = bot_gap
 
         if side:
@@ -168,9 +223,9 @@ def process_video(bv_id):
             })
 
         if (ci+1) % 100 == 0:
-            print(f"  CLIP: {ci+1}/{len(candidates)} | {len(naafiri_frames)} Naafiri")
+            print(f"  CLIP: {ci+1}/{len(candidates)} | {len(naafiri_frames)} {TARGET}")
 
-    print(f"Naafiri frames: {len(naafiri_frames)}")
+    print(f"{TARGET} frames: {len(naafiri_frames)}")
 
     # Merge (5-min window + voting)
     naafiri_frames.sort(key=lambda x: x["ts"])
@@ -200,16 +255,22 @@ def process_video(bv_id):
     # Confidence
     for g in merged:
         ns, ng = g["naafiri_sim"], g["naafiri_gap"]
-        if ns >= 0.82 and ng >= 0.06: g["conf"] = "高"
-        elif ns >= 0.78 and ng >= 0.04: g["conf"] = "中"
+        if ns >= CONF_HIGH_SIM and ng >= CONF_HIGH_GAP: g["conf"] = "高"
+        elif ns >= CONF_MEDIUM_SIM and ng >= CONF_MEDIUM_GAP: g["conf"] = "中"
         else: g["conf"] = "低"
 
     return merged, ts_map
 
 # ===== Export Excel =====
 def export_excel(bv_id, merged):
-    xlsx_path = f"{OUT_DIR}/naafiri_mid_index_{bv_id}_final_v2.xlsx"
+    # Output filename: use config-driven prefix when available, else legacy naming
+    if _pipeline_config:
+        output_prefix = f"{TARGET.lower()}_mid_index"
+        xlsx_path = f"{OUT_DIR}/{output_prefix}_{bv_id}.xlsx"
+    else:
+        xlsx_path = f"{OUT_DIR}/naafiri_mid_index_{bv_id}_final_v2.xlsx"
     wb = xlsxwriter.Workbook(xlsx_path, {"nan_inf_to_errors": True})
+    sheet_name = f"{TARGET}中单索引"
 
     hdr_f = wb.add_format({"bold":True,"bg_color":"#2F5496","font_color":"white","border":1,"align":"center","valign":"vcenter","font_size":10})
     cell = wb.add_format({"border":1,"align":"center","valign":"vcenter","font_size":9})
@@ -221,12 +282,12 @@ def export_excel(bv_id, merged):
 
     headers = [
         "序号","视频标题","BV号","跳转链接","对局时间(分P内)","分P",
-        "Naafiri队伍","对位英雄","置信度","Naafiri_Sim","Gap","帧数",
+        f"{TARGET}队伍","对位英雄","置信度",f"{TARGET}_Sim","Gap","帧数",
         "对位Top3候选","截图","备注"
     ]
     col_w = [4,38,16,48,12,4,6,16,8,9,8,5,35,20,22]
 
-    ws = wb.add_worksheet("Naafiri中单索引")
+    ws = wb.add_worksheet(sheet_name)
     for c,h in enumerate(headers): ws.write(0,c,h,hdr_f)
     ws.freeze_panes(1,0); ws.autofilter(0,0,len(merged),len(headers)-1)
     for c,w in enumerate(col_w): ws.set_column(c,c,w)
@@ -263,7 +324,7 @@ def export_excel(bv_id, merged):
         # Screenshot
         ss_dir = f"data/screenshots/{bv_id}"; os.makedirs(ss_dir, exist_ok=True)
         fpath = os.path.join(frame_dir, g["fname"])
-        ss_path = os.path.join(ss_dir, f"match_{g['ts']}_Naafiri_vs_{g['opponent']}.jpg")
+        ss_path = os.path.join(ss_dir, f"match_{g['ts']}_{TARGET}_vs_{g['opponent']}.jpg")
         if not os.path.exists(ss_path) and os.path.exists(fpath):
             shutil.copy2(fpath, ss_path)
         if os.path.exists(ss_path):
@@ -283,13 +344,6 @@ def export_excel(bv_id, merged):
 # ===== MAIN =====
 all_results = {}
 
-# Accept BV argument(s) from command line, or use default list
-import sys
-if len(sys.argv) > 1:
-    targets = sys.argv[1:]
-else:
-    targets = targets
-
 for bv_id in targets:
     merged, ts_map = process_video(bv_id)
     xlsx = export_excel(bv_id, merged)
@@ -307,7 +361,10 @@ if len(targets) <= 1:
     import sys; sys.exit(0)
 
 print(f"\n{'='*60}\nVALIDATION SUMMARY\n{'='*60}")
-summary_path = f"{OUT_DIR}/final_validation_summary.xlsx"
+if _pipeline_config:
+    summary_path = f"{OUT_DIR}/final_validation_summary_{TARGET.lower()}.xlsx"
+else:
+    summary_path = f"{OUT_DIR}/final_validation_summary.xlsx"
 wb2 = xlsxwriter.Workbook(summary_path, {"nan_inf_to_errors": True})
 
 # Sheet 1: Overview
@@ -343,7 +400,7 @@ ws1.write(len(targets)+2,0,"合计",fmt["hdr"]); ws1.write(len(targets)+2,1,tota
 
 # Sheet 2: Per-game detail
 ws2 = wb2.add_worksheet("All Games Detail")
-df = ["BV号","分P","分P内时间","全局时间","Naafiri队伍","对位英雄","置信度","Naafiri_Sim","Gap","帧数","对位Top1","对位Top2","对位Top3","投票"]
+df = ["BV号","分P","分P内时间","全局时间",f"{TARGET}队伍","对位英雄","置信度",f"{TARGET}_Sim","Gap","帧数","对位Top1","对位Top2","对位Top3","投票"]
 for c,h in enumerate(df): ws2.write(0,c,h,fmt["hdr"])
 ws2.set_column(0,0,16); ws2.set_column(1,1,4); ws2.set_column(2,2,10); ws2.set_column(3,3,8)
 ws2.set_column(4,4,6); ws2.set_column(5,5,14); ws2.set_column(6,13,10)
